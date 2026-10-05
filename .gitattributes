@@ -1,4 +1,4 @@
-﻿# 部署在 Linux（Docker），统一 LF；否则 CRLF 会进容器
+# Force LF everywhere (Docker runs on Linux)
 * text=auto eol=lf
 *.png binary
 *.gguf binary
