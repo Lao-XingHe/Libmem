@@ -1,4 +1,4 @@
-﻿# B3 表头引擎 (Header Engine)
+# B3 表头引擎 (Header Engine)
 
 ## 目标
 记忆的物理防火墙 — SQLite 表头索引 + FAISS 向量索引。

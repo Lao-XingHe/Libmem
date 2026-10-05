@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 r"""AML（Agent Memory Leaderboard）· **参赛插件服务**
 
 官方契约只要求两类操作（其余全部由平台负责）：
