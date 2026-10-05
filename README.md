@@ -216,3 +216,59 @@ python selftest.py
 * 上游：`shufang-os/v2`（V1.3.4）。提取脚本：`scratch/_aml_extract.py`；
 * 本版**不含**生产数据（`data/` 由部署环境提供），也**不碰**生产库；
 * 上游的实测战绩与全部结论：`longmemeval/LEADERBOARD-20261001.md`（§3.11–3.15）。
+
+
+---
+
+## 附录 · 相对上游的方法改动说明
+
+> 竞赛「开源方法」类要求提交「公开仓库、固定 commit、**原始工作引用**和**方法改动说明**」。
+> 原始工作引用见 `NOTICE`；本节是改动说明。
+
+**上游**：书房 OS 记忆插件（Shufang OS）v1.0 – V1.3.4，归档于 `gitee.com/lao-xinghe/study`。
+**本条**：其参赛子集，为 AML 的 `Add / Search` 契约而裁剪与改造。
+
+### 一、保留下来的（三条脊椎）
+
+| 层 | 上游实现 | 本条件 |
+|---|---|---|
+| 表头引擎 | `B3_header_engine`（SQLite + FTS5 + 原文索引） | **保留**，新增 `user_id` 隔离列与两个索引 |
+| 双门检索 | `B4_dual_gate_retrieval`（Phase1 过滤 → 四路 → RRF → CE 重排） | **保留**；四路与 RRF 全开 |
+| 交付层 | 上游把命中条目交给 MCP 工具 | **改为** AML 的 `POST /search` 响应（`{"data":[…]}`） |
+
+### 二、移除的（及理由，逐条）
+
+| 模块 | 移除理由 |
+|---|---|
+| `B1_cold_memory` | 参赛不做实时记录：数据由平台 `Add` 推入。**只借用它的逐轮 jsonl 格式**作为装载格式 |
+| `B2_warm_extract` | ①唯一"建库必须调 LLM"的环节（轮级 246,738 轮 ⇒ 约 34~137 小时）②实测**原文索引即可达 97.6% 召回**③摘要会抹平竞赛正问的细节 |
+| `B5_heat_state` | 无使用史 ⇒ `heat/count` 是"没有定义的输入"；且热度编码**使用频率**、竞赛考**内容相关** |
+| `B7_audit` | 对分数 **0**；`/search` 是同步接口，多写一次库只加延迟 |
+| `B6_map_protocol` | `clarify`（拒答话术）与**平台固定提示词取向相反**（平台写着 "Do not refuse just because…"）；`protocol.py` 在上游生产里本就没有调用者 |
+| `C1_knowledge` | 竞赛文本赛道无知识库语料 |
+| `C3_persona` | 参赛不扮演角色；平台用自己的 `system_prompt` |
+| `dsh-cold-memory-watcher` | 桌面集成（Node），与答题无关 |
+
+### 三、新增/改造的（本条的实质工作）
+
+1. **`C2_aml_service/server.py`（新）**：AML `Add / Search / health` HTTP 服务。
+   上游 `C2` 是 MCP **stdio**，不是 HTTP —— 这是从"插件"到"参赛服务"最大的一块新增。
+2. **`user_id` 隔离（全链路）**：官方原文 "`user_id` 是 Search 接口**唯一使用**的检索范围标识"。
+   落实点：`_filter_where` 唯一收口 + FTS 预筛 + **路4 走 filters** +
+   **路2/路3 的索引按用户作用域建**（上游是**全表**建，会跨用户泄漏）+ `memory_id` 拌 `user_id` +
+   `_route_objects` 缓存键含用户作用域。
+3. **`phase2_rank` 的 fail-open 护栏**：阈值只许降噪、**不许清零**。
+   （实测：嵌入服务挂 ⇒ hash 兜底 ⇒ 余弦≈0 ⇒ 上限阈值把每条都切掉 ⇒ **每个查询返回空**。）
+4. **`neighbours_of` + `expand_hits`（命中即扩窗）**：上游有，本条默认开 **±2 轮**
+   （5 个数据集中 3 个评测"顺序"：ScriptMem/CL-Bench 的 `ordering`、BEAM 的 `event_ordering`）。
+5. **`created_at` 从 `Add` 时间戳派生**：上游 `time_bucket`/`source_date` 取"现在"，
+   而竞赛是把历史一次性推入 ⇒ 用摄取时刻会让所有记忆挤进本月、**时间题直接错**。
+6. **交付格式**：每条带 `[YYYY-MM-DD]` 前缀（`content`）而 `text` **不带**
+   —— 后者是防 CL-Bench 的 `format_selected_memories` 产生**双时间戳**。
+7. **口径改动**：`routes_enabled: false → true`（召回 **46.0% → 97.6%**）· `rerank_doc: auto → raw`
+   · `phase1_limit` 显式 10000。
+
+### 四、口径与实测
+
+见 `REPRODUCE.md`（口径、复现命令、已知边界）。**所有数字都标注了开关组合** ——
+换任何一个开关数字都会变（关四路：召回 97.6% → 46.0%）。
