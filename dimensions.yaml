@@ -1,0 +1,164 @@
+# ============================================================================
+# v1.3.1「维度版」· 维度定义（★ 数据，不是代码）
+# ============================================================================
+# 设计依据：docs/roadmap/PROBE-V1.3-维度框架-通用版-20260929.md
+#   LIS 的 5 大项（查找 / 汇合 / 无满足 / 同一性 / 操作），下辖 9 子类。
+#
+# 为什么放在 YAML 而不是 Python 里（作者 2026-09-29 的要求）：
+#   「只要公约数的标准维度，给个人用户自己长出自己的维度。咱们做通用版就行了。」
+#   —— 维度定义必须是**数据**，用户改这个文件就能加维度，不用动代码。
+#
+# 改这个文件后**不用重启**：`services/shared/dimensions.py` 按 mtime 热加载。
+#
+# ⚠️ 三条已知边界（都是实测逼出来的，写在这里防止下一个人重新踩）
+#   1. **C1（无满足）在问句形态上不可识别**。LoCoMo cat5 的题面和普通题一模一样，
+#      实测陷阱题的最高重排分中位（−0.59）**高于**一类可答题（−1.12），任何阈值都分不开。
+#      所以 C1 的 patterns 只抓**显式自白**（"我是不是跟你说过…"），
+#      真正的判定必须放到**作答侧可答性判定**去，不是问句分流。
+#   2. **cat1 多跳 与 cat4 单跳 在形态上不可区分**（实测看真题：两者都是 What/Where 开头）。
+#      可区分的代理只有"**枚举形态**"——问复数类目（activities/events/books/where has…），
+#      答案是多值列表。这是 B1 的判据来源，也是本版唯一被隔离测试的变量。
+#   3. **判定顺序 = 具体的先判，A 兜底最后**。改 patterns 时注意别让宽规则吃掉窄规则。
+# ============================================================================
+
+version: v1.3.1
+fallback: A1              # 认不出来时归到这里（查找·已知条目）
+
+# ★ 强制覆盖（调试/度量用）。设成某个子类 id 后，**所有** query 都按那个维度的 policy 走。
+#   为什么必须有它：cat1 多跳与 cat4 单跳在问句形态上不可分（见边界 2），
+#   要单独量"提高交付条数"这个变量本身，就得绕开分类器。
+#   优先级：环境变量 SHUFANG_DIM_OVERRIDE > 这个键 > 正常判定。
+#   留空 = 不覆盖（正常跑）。
+#
+# ★ 2026-09-29 实测结论：`override: 'B1'`（全量给 30 条 + 去重）**未通过确认测试，保持关闭**。
+#   20 题时看着显著（+0.085，CI [+0.031,+0.147]），100 题复核被推翻：
+#     n=96 干净样本  ΔF1 = +0.034，95%CI [−0.001, +0.076]（含 0）
+#     逐题 变好 20 / 变坏 14，符号检验 p=0.39
+#     分层机制不成立：n_ev=4+ 只 +0.016，n_ev=3 是 −0.016
+#     变坏的恰好是枚举题（"Where has Melanie camped?" −0.25）
+#   另有真实代价：上下文翻倍 → 生成慢 2.3 倍（1.7s → 4.8s/次）。
+#   → 结论与明细见 docs/V1.3.1-维度版-README.md §十一之二
+override: ''
+
+# 判定顺序：越具体越先。A1 是兜底，必须最后。
+# ⚠️ B2 排在 B1 **前面**是刻意的：这样 v1.3.1 就是 V1.2 分流的**严格扩展** ——
+#    凡是 V1.2 判为 inference 的题，在这里仍然拿到"摘要+实体"，
+#    于是首次度量被隔离成**单一变量 B1（枚举题多给条数）**，
+#    而不是"交付形态也换了 + 条数也换了"两件事混在一起。
+order: [C1, D2, D1, E1, B2, B1, A3, A2, A1]
+
+# ---------------------------------------------------------------- 大项 + 交付策略
+# policy 是**唯一**影响检索/交付的字段；patterns 只决定归到哪个维度。
+parents:
+  A:
+    name: 查找
+    en: Lookup
+    thesis: 答案是一个点，找出来就完事
+    norm: 查准优先——宁可少，不许错
+    policy:
+      topk: 15
+      delivery: raw          # 给原文：事实/数字/日期只在原文里，摘要会漏甚至改错
+      dedupe: false
+  B:
+    name: 汇合
+    en: Learn
+    thesis: 答案散在多处，要么收齐、要么多轮覆盖
+    norm: 查全优先——宁滥勿缺，但不能编
+    policy:
+      topk: 30               # ★ 本版的核心改动：15 → 30（路线书 B2「提高交付条数」）
+      delivery: raw
+      dedupe: true           # 同一摘要重复出现时只留一条
+  C:
+    name: 无满足
+    en: Unfilled
+    thesis: 答案不存在，考的是敢不敢说没有
+    norm: 拒答纪律
+    policy:
+      topk: 15
+      delivery: raw
+      dedupe: false
+      answerability_check: true   # ⚠️ v1.3.1 **只标记不执行**（见文件头边界 1）
+  D:
+    name: 同一性
+    en: Identity
+    thesis: 判断"当前说的"和"以前那个"是不是同一个东西
+    norm: FRBR Work 层
+    policy:
+      topk: 20
+      delivery: raw
+      dedupe: true
+  E:
+    name: 操作
+    en: Procedural
+    thesis: 答案不在记忆里，在系统/工具里
+    norm: 与记忆分开评测
+    policy:
+      topk: 10
+      delivery: summary
+      dedupe: false
+      track: work                # 走独立评测轨
+
+# ---------------------------------------------------------------- 子类 patterns
+# 双语：中文（真实用户）+ 英文（LoCoMo）。正则，不区分大小写。
+children:
+  A1:
+    parent: A
+    name: 已知条目检索
+    zh: '是什么|叫什么|什么是|是谁|在哪|多少|几个|怎么做|怎么用|如何'
+    en: '\b(what|who|where|which|whose)\b'
+  A2:
+    parent: A
+    name: 时间限定回溯
+    zh: '什么时候|哪天|哪一天|几号|多久|多长时间|隔了|先后|时间线|几月|哪年|那天'
+    en: '\bwhen\b|\bhow long\b|\bwhat (day|date|year|month)\b|\bhow many (days|weeks|months|years)\b'
+  A3:
+    parent: A
+    name: 核实
+    zh: '对吧|对吗|是不是真的|我(说过|要求过|提过|定过).{0,12}(吗|吧)|确定.{0,8}吧'
+    en: '\b(am i right|correct me|right\?|correct\?)\b|^\s*(is|are|did|does|was|were)\b.{0,60}\b(right|correct)\b'
+  B1:
+    parent: B
+    name: 穷尽汇总
+    # ★ 枚举形态：问复数类目 / where has / what do ... like
+    # 允许 what 与名词间有修饰语（"What LGBTQ+ events has…"）。
+    # 实测（2026-09-29，全 10 段 1,986 题）：cat1 命中 27%（75/282）、cat4 误伤 11%（90/841），
+    #   净收益只有 **16 个百分点** —— 因为 cat1 多跳与 cat4 单跳**在问句形态上真的不可分**
+    #   （漏掉的 cat1 如 "What has Melanie painted?" / "What items has Melanie bought?"）。
+    #   这不是 pattern 没写好，是**形态分不出来**。见文件头边界 2。
+    #   所以 `override` 开关是必要的：要量"提高条数"这个变量本身时，用 override 强制全走 B1。
+    zh: '都(有|是|说|做|用|包含)|全部|所有|列(出来|一下|个)|有哪些|哪些|一共|总共|分别|比一比|对比一下|清单|整理(一下|成)|归类|分几类|多少个'
+    en: '\bwhat\b[\w\s''+&/-]{0,24}\b(activities|events|books|hobbies|things|places|countries|pets|jobs|sports|foods|movies|songs|games|gifts|topics|subjects|projects|ways|types|kinds|dreams)\b|\bwhere (has|have|did)\b|\bwhat (do|does|did)\b.{0,40}\b(like|enjoy|partake|participate|collect|play|read|watch|listen|do)\b|\blist\b|\ball the\b'
+  B2:
+    parent: B
+    name: 探索式
+    # ★ 刻意**包含 V1.2 的整条 `_INFER_PAT`**（would|might|likely|probably|possibly|
+    #   could|why|what kind of|what sort of|who is|what is … like）。
+    #   理由：让 v1.3.1 成为 V1.2 的严格扩展，而不是把交付形态也重新洗一遍 ——
+    #   否则首次度量的差异分不清是"B1 多给了条数"还是"某些题从摘要变成原文"。
+    policy:
+      topk: 15
+      delivery: summary      # 与 V1.2 的 inference 档完全一致
+      dedupe: false
+    zh: '你觉得|你认为|你怎么(看|想)|为什么|会不会|是不是因为|推测|估计|建议|该不该|怎么办|怎么看|看法|值得吗|应该(怎么|如何)'
+    en: '\b(would|might|likely|probably|possibly|could)\b|\bwhy\b|\bwhat (kind|sort) of\b|\bwho is\b|\bwhat is\b.{0,24}\blike\b|\bwhat (do you think|would|could)\b|\bhow (would|could|should)\b|\bdo you think\b'
+  C1:
+    parent: C
+    name: 无满足项
+    # ⚠️ 只能抓显式自白（见文件头边界 1）
+    zh: '我(是不是|有没有)(跟你|和你)?(说|提|讲|聊)过|我(之前|以前|上次)?(说|提|讲)过吗|你有没有(记录|提过)|是不是没有'
+    en: '\bdid (i|we) (ever )?(mention|tell|say|talk about)\b|\bhave i (ever )?\b|\bdo you (remember|recall)\b.{0,30}\b(mention|tell)\b'
+  D1:
+    parent: D
+    name: 指代解析
+    zh: '^(那个|这个|它|他|她|那些|这些)呢|^(那个|这个)呢|接着上次|上面(那个|说的)|你说的那个|后来呢|然后呢'
+    en: '^(that|this|it|those|these)\b|\bthe (same|above|previous) one\b'
+  D2:
+    parent: D
+    name: 版本关系
+    zh: '以前(是|怎么)|之前是|后来(为什么|怎么)|改过|取代|旧版|最新版|历史上|演变|什么时候改的|为什么改了|现在和以前'
+    en: '\bpreviously\b|\bearlier\b|\bused to\b|\bsupersed|\bold version\b|\bchanged (from|to)\b|\bbefore\b.{0,20}\b(change|update|modif)'
+  E1:
+    parent: E
+    name: 操作与指路
+    zh: '怎么(启动|运行|配置|安装|重建|打包)|在(哪|什么)个?(目录|路径|端口)|路径|端口|命令|脚本在'
+    en: '\bhow (do|can|should) i (start|run|install|configure|rebuild)\b|\bwhere (is|are) the\b|\bwhat port\b|\bwhich (file|script|command)\b'

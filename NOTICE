@@ -1,0 +1,22 @@
+LibMem-AML
+Copyright 2026 lao-xinghe（书房 OS / Shufang OS 记忆插件）
+
+本产品是「书房 OS」记忆插件 V1.3.4 的参赛子集（Library + Memory + AML），
+为 Agent Memory Leaderboard（AML）的 Add/Search 契约而裁剪与改造。
+
+原始工作与上游实现在此署名：
+
+  * 原始项目：书房 OS 记忆插件（Shufang OS Memory Plugin）v1.0 – V1.3.4
+  * 上游仓库：https://gitee.com/lao-xinghe/study （版本快照归档）
+  * 参赛改造：保留「编目 + 多途径检索 + 完整元数据交付」，移除与赛制无关的
+    采集 / 温提炼 / 热度 / 审计 / 参考咨询 / 知识库 / 人设等模块
+    （逐项理由见 README 的「模块用上 / 没用上」表）
+
+第三方组件（均为其各自许可）：
+
+  * bge-m3（嵌入模型）—— MIT License, BAAI
+  * bge-reranker-v2-m3（重排模型）—— MIT License, BAAI
+  * jieba —— MIT License
+  * PyYAML —— MIT License
+
+评测数据集（LongMemEval 等）不在本仓库内，其许可与使用条款归上游数据集所有。

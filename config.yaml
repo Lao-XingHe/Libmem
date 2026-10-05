@@ -1,0 +1,96 @@
+# ============================================================
+# 参赛插件（AML · Agent Memory Leaderboard）配置
+# ============================================================
+# 由 `shufang-os/v2/config.yaml` 派生，**只保留参赛路径真正读的键**。
+#
+# 相对原版的三处实质改动（都是实测/契约驱动的，不是偏好）：
+#   1. `routes_enabled: false → true`
+#      四路 + RRF。实测（LongMemEval-S 轮级库，500 题，纯检索）：
+#        关：召回@1 36.0% · 召回@10 **46.0%**
+#        开：召回@1 92.2% · 召回@10 **97.6%**   ← +51.6pp
+#      代价：每题检索 320ms → **518ms**（1.62×）。
+#      生产默认关着是历史取舍；**参赛没有理由关**。
+#   2. `rerank_doc: auto → raw`
+#      平台固定的回答提示词写着 "Your memories are episodic raw observations"，
+#      而 Add 进来的就是原文（我们没有 B2 摘要）。读摘要等于读一份不存在的文本。
+#   3. `phase1_limit: 10000`（显式写死）
+#      原版默认与"FTS 是否可用"绑定（可用 1000 / 不可用 10000）。
+#      参赛库由平台**流式推入**，用户数据量不可控；
+#      显式给大上限，避免"候选被 LIMIT 截断"这类**静默**召回损失
+#      （本仓踩过：LoCoMo 上 LIMIT 1000 只放行 17%，recall@15 从 55% 塌到 10.8%）。
+#
+# ⚠️ 不在本文件里的段（extract_schedule / watcher / knowledge / b6_map_protocol /
+#    providers / llm.small）**对应的模块已从参赛版删除**，留着只会误导。
+
+retrieval:
+  # ---- 四路召回 + RRF 融合（★ 参赛版打开）----
+  routes_enabled: true
+  # 哪几路参与融合。留一法（LoCoMo 1970 题）的边际贡献：
+  #   去词法 −12.6 · 去语义 −4.9 · 去时间 −0.4（非显著）· 去实体 −0.2（非显著）
+  # ⇒ **词法路最值钱**（它在吃整篇原文）；时间/实体几乎免费，留着当保险。
+  routes: semantic,entity,time,lexical
+  # 路2 的共现约束：一条记忆要同时命中几个种子实体才算候选。
+  # 实测独占覆盖在两个语料上都以 2 最优（英文 2.2%→2.8%、中文 4.0%→6.0%）。
+  entity_min_hits: 2
+  # 时间路窗口内的破平键 = 语义相关性（默认开）。
+  routes_time_order: true
+  # 语言门控：按策略表把该语言下无贡献的路摘掉（英文打原文索引 / 中文打摘要+实体索引）
+  routes_lang_gate: true
+
+  # ---- 重排 ----
+  rerank_enabled: true
+  # ★ 读**原文**（见文件头第 2 条）
+  rerank_doc: raw
+  rerank_pool: 30
+  # 重排服务（bge-reranker-v2-m3）。可用 AML_RERANK_BASE 环境变量覆盖。
+  rerank_base: http://127.0.0.1:18098
+  rerank_model: bge-reranker-v2-m3
+
+  # ---- 候选与预筛 ----
+  fts_prefilter: true
+  fts_k: 2000
+  phase1_limit: 10000
+  # MMR 多样性：1.0 = 关闭（纯按相关性）。参赛题多为"找那条具体记忆"，
+  # 不要为了多样性牺牲最相关的那条。
+  mmr_lambda: 1.0
+  # 伪相关反馈：默认关。它用**种子记忆的实体**做扩张，而路2 已经是同一件事，
+  # 两者同源会重复扩张（代码里 route_fuse 打开时也会显式跳过 PRF）。
+  prf_enabled: false
+
+  # ---- 向量 ----
+  embed_backend: llama
+  embed_llama_base: http://127.0.0.1:18099
+  embed_cache: true
+  embed_batch: 64
+  embed_workers: 4
+
+  # ---- 命中即扩窗（★ 参赛版**开着**，window=2）----
+  # 为什么开（2026-10-03 读官方 5 个数据集的 pipeline 后定的）：
+  #   **5 个文本数据集里有 3 个显式评测"顺序"** ——
+  #     ScriptMem 的 `ordering` · CL-Bench 的 `ordering` · BEAM 的 `event_ordering`（Kendall τ × F1）。
+  #   只给 top-k 单轮时，序列里排在 top-k 之外的事件**读者根本拿不到**，
+  #   排序题必然缺项；带上"命中轮 ± 2 轮"才能把序列补齐。
+  #
+  # 为什么是 2 而不是 8：
+  #   窗口的代价是**交付字符数**。100 题上的"值在场率"曲线（9B）：
+  #     ±0 → 62.0%   ±1 → 66.0%   ±2 → **68.0%**   ±4 → 70.0%   ±8 → 74.0%
+  #   ±2 已拿到一半以上收益，而交付字符从 11k 只涨到 33k（±8 是 59k）。
+  #   ⚠️ 那条曲线是在**测试集**上量的，不是在这 5 个数据集上 —— 属**推理**，非实测。
+  #
+  # 位置保证（代码层面已核）：交付顺序是 `budget_clip → heat → expand_hits`，
+  #   即扩窗在**预算裁剪之后**、且是**加法** ⇒ 原本的命中不会被邻居挤掉；
+  #   邻居**不吃热度**（否则"挨着热门条目就变热"，污染热度闭环）。
+  expand_window: 2
+  expand_budget_chars: 24000
+
+paths:
+  # 相对 data_root 解析；参赛版由 --data-dir / SHUFANG_DATA_DIR 指定根
+  data_root: data
+  index_dir: data/index
+  cold_vault: data/cold_vault
+  warm_dir: data/warm
+  knowledge_dir: data/knowledge
+
+server:
+  api_host: 0.0.0.0
+  api_port: 8080

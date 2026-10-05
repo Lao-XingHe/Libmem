@@ -1,0 +1,21 @@
+﻿# ── 提交前合规（AML 官方「明确不公开」清单）──────────────────────────
+# 评测产物**含参考答案/题目原文/判定**，不得进公开仓库。
+# 官方原文：「数据集原文、保留题目、标准答案…请勿在 Issue 或 Pull Request 中提交」。
+# 评测产物统一放在仓外 ../aml-eval-artifacts/（用 check_submission.py 复核）。
+hyp_*.json
+hyp_*.jsonl
+hyp_*.meta.json
+judge_batches*/
+*.judged.json
+cloud_sample*.json
+_selftest_data/
+data/
+__pycache__/
+*.pyc
+*.gguf
+*.db
+*.db-wal
+*.db-shm
+# 本地覆盖（不要提交任何 key）
+.env
+*.local.yaml
