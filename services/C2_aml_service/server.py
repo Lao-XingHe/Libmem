@@ -414,9 +414,9 @@ class AmlService:
         #   `{"data":[...]}` 的条目 schema 官方没有逐字规定，所以多给一个别名是**便宜的保险**：
         #   键名不匹配会让整条记忆在拼装时被**静默丢掉**（"检索到了但读者看不到"），
         #   而这类故障在分数上只表现为"答错"，极难定位。
-        return {
+        out = {
             "id": item.get("memory_id"),
-            # `content` 带日期前缀：服务**不自己加时间戳**的编排器（LongMemEval 风格）
+            # `content` 带日期前缀：给**不自己加时间戳**的编排器（LongMemEval 风格）
             "content": content,
             # `text` **不带**前缀：CL-Bench 的 `format_selected_memories` 会自己渲染成
             # `- [{created_at}] {text}` —— 我们再带一层就变成
@@ -428,8 +428,17 @@ class AmlService:
             "user_id": item.get("user_id") or None,
             "created_at": created_at or None,
             "source_date": day or None,
-            "score": item.get("_score"),
         }
+        # ★ `score` 在官方 schema 里是"**可选，数值类型**"（2026-10-05 读 api-guide 确认）。
+        #   输出 `null` 属于"声明了字段但不是数值" ⇒ 有被判**非法条目**的风险
+        #   （官方原文："超量或存在**非法条目**会判为契约错误，不会静默截断后继续评分"）。
+        #   所以：**取不到就不输出这个键**，而不是输出 null。
+        if item.get("_score") is not None:
+            try:
+                out["score"] = float(item["_score"])
+            except (TypeError, ValueError):
+                pass
+        return out
 
     @staticmethod
     def _recency_blend(data: list) -> list:
