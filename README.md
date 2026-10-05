@@ -13,6 +13,11 @@
 > 加开关会让两边互相污染，而且生产库里那 629 条真实记忆 + 热度 + 审计
 > **绝不能被评测碰到**。
 
+**公开仓库**：
+* **GitHub（竞赛主用）**：`https://github.com/Lao-XingHe/Libmem` · SSH `git@github.com:Lao-XingHe/Libmem.git`
+* **Gitee（镜像/备份）**：`https://gitee.com/lao-xinghe/lib-mem-aml` · SSH `git@gitee.com:lao-xinghe/lib-mem-aml.git`
+* 分支 `main` · 提交时填**固定 commit**（见 `REPRODUCE.md`）
+
 **许可**：**Apache License 2.0**（OSI 开源，含专利授权）· 原始工作署名见 `NOTICE` ·
 复现步骤见 `REPRODUCE.md`。
 

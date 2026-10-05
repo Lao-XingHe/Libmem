@@ -137,6 +137,15 @@ LibMem-AML/
 
 ---
 
+## 七之前 · 仓库地址（提交时填这里）
+
+**公开仓库**：
+* **GitHub（竞赛主用）**：`https://github.com/Lao-XingHe/Libmem` · SSH `git@github.com:Lao-XingHe/Libmem.git`
+* **Gitee（镜像/备份）**：`https://gitee.com/lao-xinghe/lib-mem-aml` · SSH `git@gitee.com:lao-xinghe/lib-mem-aml.git`
+* 分支 `main` · 提交时填**固定 commit**（见 `REPRODUCE.md`）
+
+---
+
 ## 七、署名与许可
 
 * **署名**：本实现的原始工作为「书房 OS」（Shufang OS）记忆插件 V1.3.4 的参赛子集。
