@@ -372,16 +372,26 @@ class AmlService:
         top_k = max(1, min(top_k, MAX_TOP_K))
 
         t0 = time.time()
-        result = self.retrieve(
-            query_text=query,
-            # ★★ 隔离边界。空列表 = 不限定 —— 这里**绝不**允许空，
-            #    否则 A 的查询会搜到 B 的记忆（见 user_id 的 required 校验）。
-            user_ids=[user_id],
-            max_items=top_k,
-            final_topk=top_k,
-            apply_heat=False,        # 参赛版无使用史；B5/B7 已移除
-            rerank_doc="raw",        # 读原文（平台提示词："memories are episodic raw observations"）
-        )
+        try:
+            result = self.retrieve(
+                query_text=query,
+                # ★★ 隔离边界。空列表 = 不限定 —— 这里**绝不**允许空，
+                #    否则 A 的查询会搜到 B 的记忆（见 user_id 的 required 校验）。
+                user_ids=[user_id],
+                max_items=top_k,
+                final_topk=top_k,
+                apply_heat=False,        # 参赛版无使用史；B5/B7 已移除
+                rerank_doc="raw",        # 读原文（平台提示词："memories are episodic raw observations"）
+            )
+        except Exception as error:                 # noqa: BLE001
+            # ★ 契约原话："没有检索结果时，返回空数组"（200 + `{"data": []}`）。
+            #   而"库还没建好"这类**可恢复**故障若变成 500，平台的 smoke 与正式评测
+            #   都会当成接口故障（而 5xx 会被平台**有界重试**，重试也不会好）。
+            #   2026-10-05 实测：空库第一次 /search → `no such table: memories` → 500。
+            if "no such table" in str(error).lower():
+                log(f"search: 库未就绪 → 返回空结果（{type(error).__name__}: {error}）")
+                return {"data": []}
+            raise
         items = result.get("items") or []
         data = [self._to_payload(it) for it in items]
         if _RECENT_PATTERNS.search(query):
@@ -612,6 +622,17 @@ def main() -> int:
     if eff.get("routes_enabled") is not True:
         log("⚠️⚠️ 四路未开！实测召回会从 97.6% 掉到 46.0% —— "
             "检查数据目录里的 config.yaml（或加 --force-config）")
+    # ★ 启动时先把**库表建好**（2026-10-05 实测抓到的 bug，见 §"空库 500"）。
+    #   `store` 是懒加载属性（为了 /health 在模型服务没起时也能立刻 200），
+    #   而 **`/search` 路径从不碰它** ⇒ 空库第一次 /search 直接
+    #   `OperationalError: no such table: memories` → **HTTP 500**。
+    #   平台的 smoke 极可能就是「先 /health，再 /search」，正好踩这条。
+    #   `init_db()` 是**纯 SQLite、不依赖模型服务**，所以提前做**不违背**懒加载的初衷。
+    try:
+        Handler.svc.store                      # 触发 init_db() + ensure_fts()
+        log("store: 库表已就绪（空库 /search 返回空数组，而不是 500）")
+    except Exception as error:                 # noqa: BLE001
+        log(f"⚠️ store 预热失败，/search 将退化为空结果：{type(error).__name__}: {error}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

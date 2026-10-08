@@ -86,6 +86,10 @@ try:
     chk('/health 报模型健康', health.get('embed_ok') is True and health.get('rerank_ok') is True,
         f"embed={health.get('embed_ok')} rerank={health.get('rerank_ok')}")
 
+    print('\n①b 空库 /search —— **回归断言**（2026-10-05 曾返回 500：no such table: memories）')
+    code, s0 = call('/search', {'query': 'anything', 'user_id': 'nobody', 'top_k': 5})
+    chk('★ 空库 /search → 200 且 data 为空数组（不是 500）',
+        code == 200 and s0.get('data') == [], f'status={code} data={s0.get("data")}')
     print('\n② Add 一条**真实形状**的会话（带 Unix 毫秒时间戳）')
     msgs = [
         {'role': 'user', 'content': 'My sister gave me a stand mixer for my birthday.',
