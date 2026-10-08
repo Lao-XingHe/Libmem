@@ -424,6 +424,17 @@ class AmlService:
             # 两个键各服务一类编排器，这才是"键名冗余"的正解。
             "text": summary,
             "role": role or None,
+            # ★ `speaker` 是**便宜的保险**（2026-10-05 读官方仓 6 个 pipeline 后加）。
+            #   原因：longmemeval / locomo-refined / scriptmem / beam 的回答提示词把记忆
+            #   填进 **`speaker_1_memories` / `speaker_2_memories` 两个槽**
+            #   （beam 还会渲染成 `Memories for user {speaker_N_name}:`）
+            #   ⇒ 编排器**必须把我们的条目按说话人分桶**，而"它按哪个字段分桶"
+            #   **在公开仓库里看不到**（那层在平台私有编排里）。分桶失败的后果是静默的：
+            #   一堆记忆全落进一个槽，或干脆落不进。
+            #   官方明确"未声明字段会被忽略" ⇒ 多给一个别名成本为 0、收益是兜住这条不确定性。
+            #   （更稳的一层本来就有：`content` 保留 `role:` 前缀，
+            #     即使分桶失败，读者仍能从文本里看出是谁说的。）
+            "speaker": role or None,
             "session_id": item.get("session_id") or None,
             "user_id": item.get("user_id") or None,
             "created_at": created_at or None,
