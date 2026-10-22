@@ -543,6 +543,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
+        # ★ 2026-10-22：**主动关闭连接**，彻底消除 keep-alive 竞态。
+        #   实测：一次 Full 评测里出现 30 次 `ConnectionAbortedError 10053` ——
+        #   平台客户端关掉了它认为空闲的连接，而我们还在往上写。
+        #   客户端看到的就是"没有合法响应" ⇒ 平台报"检查请求字段/请求头/类型"。
+        #   代价：每个请求多一次 TCP 握手（经隧道也就几毫秒），换来确定性。
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.end_headers()
         self.wfile.write(raw)
 
