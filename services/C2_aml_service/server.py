@@ -393,6 +393,12 @@ class AmlService:
                 return {"data": []}
             raise
         items = result.get("items") or []
+        # ★ 硬夹到 top_k（2026-10-22 冒烟实测踩到）：
+        #   平台契约「返回数量**不得超过** top_k，超量判为契约错误」。
+        #   而扩窗（±2 邻居）是在检索之后追加的 ⇒ 实测 k=100 时返回了 141 / 164 条，
+        #   **既违规、又让响应体积和序列化时间翻倍**（把搜索拖到 8~9 秒）。
+        #   夹在**最后一步**：只影响交付，不影响排序与召回。
+        items = items[:top_k]
         data = [self._to_payload(it) for it in items]
         if _RECENT_PATTERNS.search(query):
             data = self._recency_blend(data)

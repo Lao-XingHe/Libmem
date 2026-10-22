@@ -50,6 +50,8 @@ ARTIFACT_PATTERNS = [
 # ② 凭据 / 密钥
 SECRET_PATTERNS = [
     re.compile(r'sk-[A-Za-z0-9]{16,}'),
+    re.compile(r'ldbd_sk_[A-Za-z0-9_\-]{16,}'),   # AML 评测密钥（2026-10-22 邮件下发）
+    re.compile(r'libmem_[A-Za-z0-9_\-]{20,}'),     # 我们自己的系统 Key
     re.compile(r'AML_API_KEY\s*=\s*["\'][^"\']{8,}'),
     re.compile(r'eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.'),   # JWT
 ]

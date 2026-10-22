@@ -41,7 +41,7 @@ retrieval:
   rerank_enabled: true
   # ★ 读**原文**（见文件头第 2 条）
   rerank_doc: raw
-  rerank_pool: 30
+  rerank_pool: 12
   # 重排服务（bge-reranker-v2-m3）。可用 AML_RERANK_BASE 环境变量覆盖。
   rerank_base: http://127.0.0.1:18098
   rerank_model: bge-reranker-v2-m3
@@ -49,7 +49,7 @@ retrieval:
   # ---- 候选与预筛 ----
   fts_prefilter: true
   fts_k: 2000
-  phase1_limit: 10000
+  phase1_limit: 800
   # MMR 多样性：1.0 = 关闭（纯按相关性）。参赛题多为"找那条具体记忆"，
   # 不要为了多样性牺牲最相关的那条。
   mmr_lambda: 1.0
@@ -80,7 +80,7 @@ retrieval:
   # 位置保证（代码层面已核）：交付顺序是 `budget_clip → heat → expand_hits`，
   #   即扩窗在**预算裁剪之后**、且是**加法** ⇒ 原本的命中不会被邻居挤掉；
   #   邻居**不吃热度**（否则"挨着热门条目就变热"，污染热度闭环）。
-  expand_window: 2
+  expand_window: 0
   expand_budget_chars: 24000
 
 paths:

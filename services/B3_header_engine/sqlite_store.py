@@ -821,6 +821,81 @@ def fts_count() -> int:
         conn.close()
 
 
+# ============================================================
+# FTS 表达式阶梯（2026-10-22：按**真实稀有度**选词）
+# ============================================================
+# 为什么：`bm25()` 会为**每个命中**查一次 docsize。只要 MATCH 命中该用户全部
+# 记忆（`"a" OR "b" OR ...` 很容易如此），一次搜索就是 1.8 万条 SQL、1.3 秒；
+# 16 并发直接超时。
+#
+# 关键洞察：**词长 ≠ 稀有度**（实测最长的词恰好是最常见的）。必须真的数
+# 每个词命中多少篇，取最少的几个 AND 起来。探测 ~0.5ms/词，进程内带缓存。
+_RARE_CACHE: dict = {}
+_RARE_CACHE_MAX = 8192
+
+
+def _count_token(table: str, token: str) -> int:
+    """某词在该 FTS 表里命中多少篇（越小越稀有）。失败当成极大（= 不优先）。"""
+    key = (table, token)
+    cached = _RARE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    expr = '"' + token.replace('"', '""') + '"'
+    conn = None
+    value = 10 ** 9
+    try:
+        conn = get_conn()
+        value = int(conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {table} MATCH ?", (expr,)
+        ).fetchone()[0])
+    except Exception:            # noqa: BLE001 - 探测失败不致命
+        value = 10 ** 9
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:    # noqa: BLE001
+                pass
+    if len(_RARE_CACHE) > _RARE_CACHE_MAX:
+        _RARE_CACHE.clear()
+    _RARE_CACHE[key] = value
+    return value
+
+
+def _expr_ladder(tokens: list, table: str, max_probe: int = 12) -> list:
+    """按选择性从高到低给出 MATCH 表达式阶梯（去重保序）。
+
+    ① AND(全部词)      —— 最严，通常 0 命中，但一次极快的查询
+    ② AND(最稀有 2 词) —— **主路径**：选择性高且保留相关性
+    ③ OR(最稀有 2 词)
+    ④ AND(最稀有 3 词)
+    ⑤ OR(全部词)       —— 兜底保召回（最慢，尽量走不到）
+    """
+    quoted = ['"' + t.replace('"', '""') + '"' for t in tokens]
+    probe = [t for t in tokens[:max_probe] if t]
+    ranked = sorted(probe, key=lambda t: _count_token(table, t)) if probe else []
+    rare_q = ['"' + t.replace('"', '""') + '"' for t in ranked]
+
+    exprs, seen = [], set()
+
+    def add(item: str) -> None:
+        if item and item not in seen:
+            seen.add(item)
+            exprs.append(item)
+
+    if len(quoted) > 1:
+        add(" AND ".join(quoted))
+    if len(rare_q) >= 2:
+        add(" AND ".join(rare_q[:2]))
+        add(" OR ".join(rare_q[:2]))
+    if len(rare_q) >= 3:
+        add(" AND ".join(rare_q[:3]))
+    if len(rare_q) == 1:
+        add(rare_q[0])
+    add(" OR ".join(quoted))
+    return exprs
+
+
 def fts_search(query_text: str, k: int = 200, task_types=None, time_buckets=None,
                layer=None, core_entity_any=None, session_ids=None,
                user_ids=None) -> list[str]:
@@ -838,7 +913,7 @@ def fts_search(query_text: str, k: int = 200, task_types=None, time_buckets=None
     if not tokens:
         return []
     # 用引号把每个 token 包成短语：避免 `-`/`*`/`OR` 之类被当 FTS5 语法。
-    expr = " OR ".join('"' + t.replace('"', '""') + '"' for t in tokens)
+    exprs = _expr_ladder(tokens, _FTS_TABLE)
     where, params = _filter_where(task_types, time_buckets, layer, prefix="m.",
                                   session_ids=session_ids, user_ids=user_ids)
     # core_entity_any 是 JSON 数组，只能在 Python 侧过滤 —— 那就多取一些再截，
@@ -852,7 +927,16 @@ def fts_search(query_text: str, k: int = 200, task_types=None, time_buckets=None
     sql += f" ORDER BY bm25({_FTS_TABLE}) LIMIT ?"
     conn = get_conn()
     try:
-        rows = conn.execute(sql, [expr] + params + [fetch_k]).fetchall()
+        rows = []
+        for expr in exprs:              # 逐级放宽：够 k 条就停
+            rows = conn.execute(sql, [expr] + params + [fetch_k]).fetchall()
+            # ★ 2026-10-22：**非空就停**，不再要求 ≥k 条。
+            #   实测：AND(最稀有 2 词) 只命中 4 篇（极精准）—— 但旧逻辑要求 ≥200 条，
+            #   于是逐级放宽到 `OR(全部词)` = 249,435 篇 ⇒ bm25 给 25 万篇算 docsize
+            #   ⇒ 一次搜索 9,988 次单行查询。词法路只是 RRF 的一路（语义路是主力），
+            #   4 条精准命中比 25 万条噪声更有价值。
+            if rows:
+                break
         out = []
         for r in rows:
             if not _entity_ok(r["ents"], core_entity_any):
@@ -1232,7 +1316,7 @@ def raw_search(query_text: str, k: int = 200, task_types=None, time_buckets=None
     tokens = raw_tokens(query_text)
     if not tokens:
         return []
-    expr = " OR ".join('"' + t.replace('"', '""') + '"' for t in tokens)
+    exprs = _expr_ladder(tokens, _RAW_FTS_TABLE)
     where, params = _filter_where(task_types, time_buckets, layer, prefix="m.",
                                   session_ids=session_ids, user_ids=user_ids)
     fetch_k = int(k) * 3 if core_entity_any else int(k)
@@ -1246,7 +1330,16 @@ def raw_search(query_text: str, k: int = 200, task_types=None, time_buckets=None
     sql += f" ORDER BY bm25({_RAW_FTS_TABLE}) LIMIT ?"
     conn = get_conn()
     try:
-        rows = conn.execute(sql, [expr] + params + [fetch_k]).fetchall()
+        rows = []
+        for expr in exprs:              # 逐级放宽：够 k 条就停
+            rows = conn.execute(sql, [expr] + params + [fetch_k]).fetchall()
+            # ★ 2026-10-22：**非空就停**，不再要求 ≥k 条。
+            #   实测：AND(最稀有 2 词) 只命中 4 篇（极精准）—— 但旧逻辑要求 ≥200 条，
+            #   于是逐级放宽到 `OR(全部词)` = 249,435 篇 ⇒ bm25 给 25 万篇算 docsize
+            #   ⇒ 一次搜索 9,988 次单行查询。词法路只是 RRF 的一路（语义路是主力），
+            #   4 条精准命中比 25 万条噪声更有价值。
+            if rows:
+                break
         out = []
         for r in rows:
             if not _entity_ok(r["ents"], core_entity_any):
